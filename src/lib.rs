@@ -2,6 +2,7 @@ use core::fmt;
 use std::{
     cell::UnsafeCell,
     mem::MaybeUninit,
+    ptr,
     sync::atomic::{AtomicUsize, Ordering::*},
 };
 
@@ -79,6 +80,11 @@ impl<T> SlabAlloc<T> {
         }
     }
 
+    pub fn flush_deallocs(&mut self) {
+        let garbage_list = self.take_garbage_list();
+        unsafe { self.free_garbage_list(garbage_list) }
+    }
+
     pub fn alloc(&self) -> Result<SlabPtr<T>, AllocError> {
         let _defer = self.defer_deallocs();
         let mut index = self.free_list.load(Acquire);
@@ -100,8 +106,7 @@ impl<T> SlabAlloc<T> {
     }
 
     pub unsafe fn dealloc(&self, ptr: SlabPtr<T>) {
-        let index =
-            ptr.node as usize - (&self.nodes[0] as *const Node<T> as usize);
+        let index = ptr.node as usize - (ptr::addr_of!(self.nodes[0]) as usize);
 
         if self.try_flush_deallocs() {
             self.prepend_free_list(index, index);
