@@ -379,4 +379,33 @@ mod test {
             allocator.dealloc(slab_ptr_4);
         }
     }
+
+    #[test]
+    fn pause() {
+        let allocator = SlabAlloc::<i32>::new(2);
+        let slab_ptr_0 = allocator.alloc().unwrap();
+        let slab_ptr_1 = allocator.alloc().unwrap();
+
+        {
+            let _defer = allocator.defer_deallocs();
+            unsafe {
+                slab_ptr_0.pointer().write(-23);
+                assert_eq!(*slab_ptr_0.pointer(), -23);
+                slab_ptr_1.pointer().write(5);
+                assert_eq!(*slab_ptr_1.pointer(), 5);
+
+                allocator.dealloc(slab_ptr_0);
+                allocator.alloc().unwrap_err();
+                allocator.dealloc(slab_ptr_1);
+                allocator.alloc().unwrap_err();
+            }
+        }
+
+        let slab_ptr_2 = allocator.alloc().unwrap();
+        unsafe {
+            slab_ptr_2.pointer().write(-20354);
+            assert_eq!(*slab_ptr_2.pointer(), -20354);
+            allocator.dealloc(slab_ptr_2);
+        }
+    }
 }
