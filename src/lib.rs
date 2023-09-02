@@ -6,18 +6,6 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering::*},
 };
 
-const TAG_WIDTH: u32 = 2;
-
-const TAG_SHIFT: u32 = usize::BITS - TAG_WIDTH;
-
-const TAG_MASK: usize = usize::MAX << TAG_SHIFT;
-
-const TAG_ALLOCED: usize = 0b00 << TAG_SHIFT;
-
-const TAG_FREE: usize = 0b01 << TAG_SHIFT;
-
-const TAG_GARBAGE: usize = 0b10 << TAG_SHIFT;
-
 #[derive(Debug, Clone)]
 pub struct AllocError {
     _priv: (),
@@ -43,12 +31,9 @@ impl<T> fmt::Debug for SlabAlloc<T> {
 
 impl<T> SlabAlloc<T> {
     pub fn new(capacity: usize) -> Self {
-        let nodes = (0 .. capacity).map(|i| {
-            let node_next = NodeNext { tag: NodeTag::Free, index: i + 1 };
-            Node {
-                next_bits: AtomicUsize::new(node_next.encode()),
-                data: UnsafeCell::new(MaybeUninit::uninit()),
-            }
+        let nodes = (0 .. capacity).map(|i| Node {
+            next: AtomicUsize::new(i + 1),
+            data: UnsafeCell::new(MaybeUninit::uninit()),
         });
 
         Self {
@@ -93,11 +78,8 @@ impl<T> SlabAlloc<T> {
                 Some(node) => node,
                 None => break Err(AllocError { _priv: () }),
             };
-            let next_bits = node.next_bits.load(Relaxed);
-            let next = NodeNext::decode(next_bits);
-            match self
-                .free_list
-                .compare_exchange(next_bits, next.index, Release, Relaxed)
+            let next = node.next.load(Relaxed);
+            match self.free_list.compare_exchange(index, next, Release, Relaxed)
             {
                 Ok(_) => break Ok(SlabPtr { node: node as *const Node<T> }),
                 Err(new_index) => index = new_index,
@@ -142,11 +124,20 @@ impl<T> SlabAlloc<T> {
         self.garbage_list.swap(0, AcqRel)
     }
 
+    fn find_last_node(&self, first_index: usize) -> Option<usize> {
+        let mut index = first_index;
+        let mut last_index = None;
+        while let Some(node) = self.nodes.get(index) {
+            last_index = Some(index);
+            index = node.next.load(Relaxed);
+        }
+        last_index
+    }
+
     unsafe fn prepend_free_list(&self, first_index: usize, last_index: usize) {
         let mut free_list = self.free_list.load(Acquire);
         loop {
-            let next = NodeNext { tag: NodeTag::Free, index: free_list };
-            self.nodes[last_index].next_bits.store(next.encode(), Relaxed);
+            self.nodes[last_index].next.store(free_list, Relaxed);
             match self
                 .free_list
                 .compare_exchange(free_list, first_index, Release, Relaxed)
@@ -164,8 +155,7 @@ impl<T> SlabAlloc<T> {
     ) {
         let mut garbage_list = self.garbage_list.load(Acquire);
         loop {
-            let next = NodeNext { tag: NodeTag::Garbage, index: garbage_list };
-            self.nodes[last_index].next_bits.store(next.encode(), Relaxed);
+            self.nodes[last_index].next.store(garbage_list, Relaxed);
             match self
                 .garbage_list
                 .compare_exchange(garbage_list, first_index, Release, Relaxed)
@@ -177,34 +167,13 @@ impl<T> SlabAlloc<T> {
     }
 
     unsafe fn free_garbage_list(&self, first_index: usize) {
-        let mut index = first_index;
-        let mut maybe_last_index = None;
-        while let Some(node) = self.nodes.get(index) {
-            maybe_last_index = Some(index);
-            let mut next = NodeNext::decode(node.next_bits.load(Relaxed));
-            debug_assert_eq!(next.tag, NodeTag::Garbage);
-
-            next.tag = NodeTag::Free;
-            node.next_bits.store(next.encode(), Relaxed);
-            index = next.index;
-        }
-
-        if let Some(last_index) = maybe_last_index {
+        if let Some(last_index) = self.find_last_node(first_index) {
             self.prepend_free_list(first_index, last_index);
         }
     }
 
     unsafe fn merge_garbage_list(&self, first_index: usize) {
-        let mut index = first_index;
-        let mut maybe_last_index = None;
-        while let Some(node) = self.nodes.get(index) {
-            maybe_last_index = Some(index);
-            let next = NodeNext::decode(node.next_bits.load(Relaxed));
-            debug_assert_eq!(next.tag, NodeTag::Garbage);
-            index = next.index;
-        }
-
-        if let Some(last_index) = maybe_last_index {
+        if let Some(last_index) = self.find_last_node(first_index) {
             self.prepend_garbage_list(first_index, last_index);
         }
     }
@@ -255,80 +224,15 @@ impl<'alloc, T> Drop for DeallocDeferral<'alloc, T> {
 }
 
 struct Node<T> {
-    next_bits: AtomicUsize,
+    next: AtomicUsize,
     data: UnsafeCell<MaybeUninit<T>>,
 }
 
 impl<T> fmt::Debug for Node<T> {
     fn fmt(&self, fmtr: &mut fmt::Formatter) -> fmt::Result {
         fmtr.debug_struct("SlabAlloc")
-            .field("next_bits", &self.next_bits)
-            .field(
-                "next_decoded",
-                &NodeNext::try_decode(self.next_bits.load(Relaxed)),
-            )
+            .field("next_bits", &self.next)
             .field("data", &self.data)
             .finish()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NodeTag {
-    Alloced,
-    Garbage,
-    Free,
-}
-
-impl NodeTag {
-    fn encode(self) -> usize {
-        match self {
-            Self::Alloced => TAG_ALLOCED,
-            Self::Free => TAG_FREE,
-            Self::Garbage => TAG_GARBAGE,
-        }
-    }
-
-    #[allow(unused)]
-    fn decode(bits: usize) -> Self {
-        match Self::try_decode(bits) {
-            Some(tag) => tag,
-            None => unreachable!(),
-        }
-    }
-
-    #[inline(always)]
-    fn try_decode(bits: usize) -> Option<Self> {
-        match bits {
-            TAG_ALLOCED => Some(Self::Alloced),
-            TAG_FREE => Some(Self::Free),
-            TAG_GARBAGE => Some(Self::Garbage),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct NodeNext {
-    tag: NodeTag,
-    index: usize,
-}
-
-impl NodeNext {
-    fn encode(self) -> usize {
-        (self.index & !TAG_MASK) | self.tag.encode()
-    }
-
-    fn decode(bits: usize) -> Self {
-        match Self::try_decode(bits) {
-            Some(next) => next,
-            None => unreachable!(),
-        }
-    }
-
-    #[inline(always)]
-    fn try_decode(bits: usize) -> Option<Self> {
-        let index = bits & !TAG_MASK;
-        let tag = NodeTag::try_decode(bits)?;
-        Some(Self { tag, index })
     }
 }
