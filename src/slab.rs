@@ -49,27 +49,6 @@ impl<T> SlabAlloc<T> {
         DeallocDeferral { allocator: self }
     }
 
-    pub fn try_flush_deallocs(&self) -> bool {
-        let garbage_list = if self.defer_hint() == 1 {
-            self.take_garbage_list()
-        } else {
-            self.null_index()
-        };
-
-        if self.count_defers() == 0 {
-            unsafe { self.free_garbage_list(garbage_list) }
-            true
-        } else {
-            unsafe { self.merge_garbage_list(garbage_list) }
-            false
-        }
-    }
-
-    pub fn flush_deallocs(&mut self) {
-        let garbage_list = self.take_garbage_list();
-        unsafe { self.free_garbage_list(garbage_list) }
-    }
-
     pub fn alloc(&self) -> Result<AllocHandle<T>, AllocError> {
         let _defer = self.defer_deallocs();
         let mut index = self.free_list.load(Acquire);
@@ -176,6 +155,22 @@ impl<T> SlabAlloc<T> {
     unsafe fn merge_garbage_list(&self, first_index: usize) {
         if let Some(last_index) = self.find_last_node(first_index) {
             self.prepend_garbage_list(first_index, last_index);
+        }
+    }
+
+    fn try_flush_deallocs(&self) -> bool {
+        let garbage_list = if self.defer_hint() == 1 {
+            self.take_garbage_list()
+        } else {
+            self.null_index()
+        };
+
+        if self.count_defers() == 0 {
+            unsafe { self.free_garbage_list(garbage_list) }
+            true
+        } else {
+            unsafe { self.merge_garbage_list(garbage_list) }
+            false
         }
     }
 }
