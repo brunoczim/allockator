@@ -1,0 +1,30 @@
+[package]
+name = "allockator-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.allockator]
+path = ".."
+
+[dependencies.fuzzsuite]
+path = "./fuzzsuite"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = [".", "./fuzzsuite"]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "slab"
+path = "fuzz_targets/slab.rs"
+test = false
+doc = false

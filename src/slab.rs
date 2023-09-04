@@ -44,6 +44,10 @@ impl<T> SlabAlloc<T> {
         }
     }
 
+    pub fn capacity(&self) -> usize {
+        self.nodes.len()
+    }
+
     pub fn defer_deallocs(&self) -> DeallocDeferral<T> {
         self.acquire_defer();
         DeallocDeferral { allocator: self }
@@ -175,6 +179,10 @@ impl<T> SlabAlloc<T> {
     }
 }
 
+unsafe impl<T> Send for SlabAlloc<T> {}
+
+unsafe impl<T> Sync for SlabAlloc<T> {}
+
 pub struct AllocHandle<T> {
     node: *const Node<T>,
 }
@@ -190,6 +198,10 @@ impl<T> AllocHandle<T> {
         (*(*self.node).data.get()).as_mut_ptr()
     }
 }
+
+unsafe impl<T> Send for AllocHandle<T> {}
+
+unsafe impl<T> Sync for AllocHandle<T> {}
 
 pub struct DeallocDeferral<'alloc, T> {
     allocator: &'alloc SlabAlloc<T>,
