@@ -172,7 +172,7 @@ where
         {
             self.threads.remove(&message);
             while let Ok(message) = self.receiver.try_recv() {
-                self.threads.remove(&message);
+                self.threads.remove(&message).unwrap().join().unwrap();
             }
             self.ensure_min_threads();
         }
