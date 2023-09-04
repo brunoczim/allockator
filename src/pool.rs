@@ -11,16 +11,16 @@ pub struct AllocError {
     _priv: (),
 }
 
-pub struct SlabAlloc<T> {
+pub struct PoolAlloc<T> {
     defer_count: AtomicUsize,
     garbage_list: AtomicUsize,
     free_list: AtomicUsize,
     nodes: Box<[Node<T>]>,
 }
 
-impl<T> fmt::Debug for SlabAlloc<T> {
+impl<T> fmt::Debug for PoolAlloc<T> {
     fn fmt(&self, fmtr: &mut fmt::Formatter) -> fmt::Result {
-        fmtr.debug_struct("SlabAlloc")
+        fmtr.debug_struct("PoolAlloc")
             .field("defer_count", &self.defer_count)
             .field("garbage_list", &self.garbage_list)
             .field("free_list", &self.free_list)
@@ -29,7 +29,7 @@ impl<T> fmt::Debug for SlabAlloc<T> {
     }
 }
 
-impl<T> SlabAlloc<T> {
+impl<T> PoolAlloc<T> {
     pub fn new(capacity: usize) -> Self {
         let nodes = (0 .. capacity).map(|i| Node {
             next: AtomicUsize::new(i + 1),
@@ -179,9 +179,9 @@ impl<T> SlabAlloc<T> {
     }
 }
 
-unsafe impl<T> Send for SlabAlloc<T> {}
+unsafe impl<T> Send for PoolAlloc<T> {}
 
-unsafe impl<T> Sync for SlabAlloc<T> {}
+unsafe impl<T> Sync for PoolAlloc<T> {}
 
 pub struct AllocHandle<T> {
     node: NonNull<Node<T>>,
@@ -204,7 +204,7 @@ unsafe impl<T> Send for AllocHandle<T> {}
 unsafe impl<T> Sync for AllocHandle<T> {}
 
 pub struct DeallocDeferral<'alloc, T> {
-    allocator: &'alloc SlabAlloc<T>,
+    allocator: &'alloc PoolAlloc<T>,
 }
 
 impl<'alloc, T> fmt::Debug for DeallocDeferral<'alloc, T> {
@@ -238,7 +238,7 @@ struct Node<T> {
 
 impl<T> fmt::Debug for Node<T> {
     fn fmt(&self, fmtr: &mut fmt::Formatter) -> fmt::Result {
-        fmtr.debug_struct("SlabAlloc")
+        fmtr.debug_struct("PoolAlloc")
             .field("next", &self.next)
             .field("data", &self.data)
             .finish()
@@ -247,172 +247,172 @@ impl<T> fmt::Debug for Node<T> {
 
 #[cfg(test)]
 mod test {
-    use super::SlabAlloc;
+    use super::PoolAlloc;
 
     #[test]
     fn alloc_one() {
-        let allocator = SlabAlloc::<i32>::new(3);
-        let slab_ptr = allocator.alloc().unwrap();
+        let allocator = PoolAlloc::<i32>::new(3);
+        let handle = allocator.alloc().unwrap();
 
         unsafe {
-            slab_ptr.pointer().write(9);
-            assert_eq!(*slab_ptr.pointer(), 9);
-            *slab_ptr.pointer() = 5;
-            assert_eq!(*slab_ptr.pointer(), 5);
+            handle.pointer().write(9);
+            assert_eq!(*handle.pointer(), 9);
+            *handle.pointer() = 5;
+            assert_eq!(*handle.pointer(), 5);
 
-            allocator.dealloc(slab_ptr);
+            allocator.dealloc(handle);
         }
     }
 
     #[test]
     fn alloc_two_concomitant() {
-        let allocator = SlabAlloc::<i32>::new(3);
-        let slab_ptr_0 = allocator.alloc().unwrap();
-        let slab_ptr_1 = allocator.alloc().unwrap();
+        let allocator = PoolAlloc::<i32>::new(3);
+        let handle_0 = allocator.alloc().unwrap();
+        let handle_1 = allocator.alloc().unwrap();
 
         unsafe {
-            slab_ptr_0.pointer().write(9);
-            assert_eq!(*slab_ptr_0.pointer(), 9);
-            slab_ptr_1.pointer().write(5);
-            assert_eq!(*slab_ptr_1.pointer(), 5);
-            assert_eq!(*slab_ptr_0.pointer(), 9);
-            *slab_ptr_0.pointer() = 19;
-            assert_eq!(*slab_ptr_0.pointer(), 19);
-            assert_eq!(*slab_ptr_1.pointer(), 5);
-            *slab_ptr_1.pointer() = 10;
-            assert_eq!(*slab_ptr_0.pointer(), 19);
-            assert_eq!(*slab_ptr_1.pointer(), 10);
+            handle_0.pointer().write(9);
+            assert_eq!(*handle_0.pointer(), 9);
+            handle_1.pointer().write(5);
+            assert_eq!(*handle_1.pointer(), 5);
+            assert_eq!(*handle_0.pointer(), 9);
+            *handle_0.pointer() = 19;
+            assert_eq!(*handle_0.pointer(), 19);
+            assert_eq!(*handle_1.pointer(), 5);
+            *handle_1.pointer() = 10;
+            assert_eq!(*handle_0.pointer(), 19);
+            assert_eq!(*handle_1.pointer(), 10);
 
-            allocator.dealloc(slab_ptr_0);
-            allocator.dealloc(slab_ptr_1);
+            allocator.dealloc(handle_0);
+            allocator.dealloc(handle_1);
         }
     }
 
     #[test]
     fn alloc_again() {
-        let allocator = SlabAlloc::<i32>::new(3);
-        let slab_ptr = allocator.alloc().unwrap();
+        let allocator = PoolAlloc::<i32>::new(3);
+        let handle = allocator.alloc().unwrap();
 
         unsafe {
-            slab_ptr.pointer().write(9);
-            assert_eq!(*slab_ptr.pointer(), 9);
-            *slab_ptr.pointer() = 5;
-            assert_eq!(*slab_ptr.pointer(), 5);
+            handle.pointer().write(9);
+            assert_eq!(*handle.pointer(), 9);
+            *handle.pointer() = 5;
+            assert_eq!(*handle.pointer(), 5);
 
-            allocator.dealloc(slab_ptr);
+            allocator.dealloc(handle);
         }
 
-        let slab_ptr = allocator.alloc().unwrap();
+        let handle = allocator.alloc().unwrap();
 
         unsafe {
-            slab_ptr.pointer().write(-23);
-            assert_eq!(*slab_ptr.pointer(), -23);
-            *slab_ptr.pointer() = 58;
-            assert_eq!(*slab_ptr.pointer(), 58);
+            handle.pointer().write(-23);
+            assert_eq!(*handle.pointer(), -23);
+            *handle.pointer() = 58;
+            assert_eq!(*handle.pointer(), 58);
 
-            allocator.dealloc(slab_ptr);
+            allocator.dealloc(handle);
         }
     }
 
     #[test]
     fn alloc_again_interleaving() {
-        let allocator = SlabAlloc::<i32>::new(3);
-        let slab_ptr_0 = allocator.alloc().unwrap();
-        let slab_ptr_1 = allocator.alloc().unwrap();
+        let allocator = PoolAlloc::<i32>::new(3);
+        let handle_0 = allocator.alloc().unwrap();
+        let handle_1 = allocator.alloc().unwrap();
 
         unsafe {
-            slab_ptr_0.pointer().write(9);
-            assert_eq!(*slab_ptr_0.pointer(), 9);
-            slab_ptr_1.pointer().write(5);
-            assert_eq!(*slab_ptr_1.pointer(), 5);
+            handle_0.pointer().write(9);
+            assert_eq!(*handle_0.pointer(), 9);
+            handle_1.pointer().write(5);
+            assert_eq!(*handle_1.pointer(), 5);
 
-            allocator.dealloc(slab_ptr_0);
+            allocator.dealloc(handle_0);
         }
 
-        let slab_ptr_2 = allocator.alloc().unwrap();
+        let handle_2 = allocator.alloc().unwrap();
 
         unsafe {
-            slab_ptr_2.pointer().write(-23);
-            assert_eq!(*slab_ptr_2.pointer(), -23);
-            slab_ptr_1.pointer().write(5);
-            assert_eq!(*slab_ptr_1.pointer(), 5);
+            handle_2.pointer().write(-23);
+            assert_eq!(*handle_2.pointer(), -23);
+            handle_1.pointer().write(5);
+            assert_eq!(*handle_1.pointer(), 5);
 
-            allocator.dealloc(slab_ptr_1);
-            allocator.dealloc(slab_ptr_2);
+            allocator.dealloc(handle_1);
+            allocator.dealloc(handle_2);
         }
     }
 
     #[test]
     fn alloc_at_limit() {
-        let allocator = SlabAlloc::<i32>::new(2);
-        let slab_ptr_0 = allocator.alloc().unwrap();
-        let slab_ptr_1 = allocator.alloc().unwrap();
+        let allocator = PoolAlloc::<i32>::new(2);
+        let handle_0 = allocator.alloc().unwrap();
+        let handle_1 = allocator.alloc().unwrap();
         allocator.alloc().unwrap_err();
 
         unsafe {
-            slab_ptr_0.pointer().write(9);
-            assert_eq!(*slab_ptr_0.pointer(), 9);
-            slab_ptr_1.pointer().write(5);
-            assert_eq!(*slab_ptr_1.pointer(), 5);
-            assert_eq!(*slab_ptr_0.pointer(), 9);
+            handle_0.pointer().write(9);
+            assert_eq!(*handle_0.pointer(), 9);
+            handle_1.pointer().write(5);
+            assert_eq!(*handle_1.pointer(), 5);
+            assert_eq!(*handle_0.pointer(), 9);
 
-            allocator.dealloc(slab_ptr_0);
+            allocator.dealloc(handle_0);
         }
 
-        let slab_ptr_2 = allocator.alloc().unwrap();
+        let handle_2 = allocator.alloc().unwrap();
         allocator.alloc().unwrap_err();
 
         unsafe {
-            slab_ptr_2.pointer().write(19);
-            assert_eq!(*slab_ptr_2.pointer(), 19);
-            assert_eq!(*slab_ptr_1.pointer(), 5);
+            handle_2.pointer().write(19);
+            assert_eq!(*handle_2.pointer(), 19);
+            assert_eq!(*handle_1.pointer(), 5);
 
-            allocator.dealloc(slab_ptr_1);
-            allocator.dealloc(slab_ptr_2);
+            allocator.dealloc(handle_1);
+            allocator.dealloc(handle_2);
         }
 
-        let slab_ptr_3 = allocator.alloc().unwrap();
-        let slab_ptr_4 = allocator.alloc().unwrap();
+        let handle_3 = allocator.alloc().unwrap();
+        let handle_4 = allocator.alloc().unwrap();
         allocator.alloc().unwrap_err();
 
         unsafe {
-            slab_ptr_3.pointer().write(119);
-            assert_eq!(*slab_ptr_3.pointer(), 119);
-            slab_ptr_4.pointer().write(115);
-            assert_eq!(*slab_ptr_4.pointer(), 115);
-            assert_eq!(*slab_ptr_3.pointer(), 119);
+            handle_3.pointer().write(119);
+            assert_eq!(*handle_3.pointer(), 119);
+            handle_4.pointer().write(115);
+            assert_eq!(*handle_4.pointer(), 115);
+            assert_eq!(*handle_3.pointer(), 119);
 
-            allocator.dealloc(slab_ptr_3);
-            allocator.dealloc(slab_ptr_4);
+            allocator.dealloc(handle_3);
+            allocator.dealloc(handle_4);
         }
     }
 
     #[test]
     fn pause() {
-        let allocator = SlabAlloc::<i32>::new(2);
-        let slab_ptr_0 = allocator.alloc().unwrap();
-        let slab_ptr_1 = allocator.alloc().unwrap();
+        let allocator = PoolAlloc::<i32>::new(2);
+        let handle_0 = allocator.alloc().unwrap();
+        let handle_1 = allocator.alloc().unwrap();
 
         {
             let _defer = allocator.defer_deallocs();
             unsafe {
-                slab_ptr_0.pointer().write(-23);
-                assert_eq!(*slab_ptr_0.pointer(), -23);
-                slab_ptr_1.pointer().write(5);
-                assert_eq!(*slab_ptr_1.pointer(), 5);
+                handle_0.pointer().write(-23);
+                assert_eq!(*handle_0.pointer(), -23);
+                handle_1.pointer().write(5);
+                assert_eq!(*handle_1.pointer(), 5);
 
-                allocator.dealloc(slab_ptr_0);
+                allocator.dealloc(handle_0);
                 allocator.alloc().unwrap_err();
-                allocator.dealloc(slab_ptr_1);
+                allocator.dealloc(handle_1);
                 allocator.alloc().unwrap_err();
             }
         }
 
-        let slab_ptr_2 = allocator.alloc().unwrap();
+        let handle_2 = allocator.alloc().unwrap();
         unsafe {
-            slab_ptr_2.pointer().write(-20354);
-            assert_eq!(*slab_ptr_2.pointer(), -20354);
-            allocator.dealloc(slab_ptr_2);
+            handle_2.pointer().write(-20354);
+            assert_eq!(*handle_2.pointer(), -20354);
+            allocator.dealloc(handle_2);
         }
     }
 }

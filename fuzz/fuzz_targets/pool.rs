@@ -1,6 +1,6 @@
 #![no_main]
 
-use allockator::slab::{AllocHandle, SlabAlloc};
+use allockator::pool::{AllocHandle, PoolAlloc};
 use fuzzsuite::{Config, InputStream, Machine, Spawner};
 use libfuzzer_sys::fuzz_target;
 use std::{
@@ -15,25 +15,25 @@ use std::{
 
 #[derive(Debug)]
 struct Shared {
-    slab: SlabAlloc<u128>,
+    pool: PoolAlloc<u128>,
     count: AtomicUsize,
 }
 
 impl Shared {
-    fn new(slab: SlabAlloc<u128>) -> Self {
-        Self { slab, count: AtomicUsize::new(0) }
+    fn new(pool: PoolAlloc<u128>) -> Self {
+        Self { pool, count: AtomicUsize::new(0) }
     }
 
     fn alloc(&self) -> Option<AllocHandle<u128>> {
-        match self.slab.alloc() {
+        match self.pool.alloc() {
             Ok(handle) => {
                 let prev = self.count.fetch_add(1, Relaxed);
-                if prev >= self.slab.capacity() {
+                if prev >= self.pool.capacity() {
                     panic!(
                         "Allocated a slot but no slots available\nAllocated \
                          count: {}\nCapacity: {}\n",
                         prev,
-                        self.slab.capacity()
+                        self.pool.capacity()
                     );
                 }
                 Some(handle)
@@ -44,52 +44,52 @@ impl Shared {
 
     unsafe fn dealloc(&self, handle: AllocHandle<u128>) {
         let prev = self.count.fetch_sub(1, Relaxed);
-        self.slab.dealloc(handle);
-        if prev == 0 || prev > self.slab.capacity() {
+        self.pool.dealloc(handle);
+        if prev == 0 || prev > self.pool.capacity() {
             panic!(
                 "Deallocating a slot but no slots to be \
                  deallocated\nAllocated count: {}\nCapacity: {}\n",
                 prev,
-                self.slab.capacity(),
+                self.pool.capacity(),
             );
         }
     }
 }
 
 #[derive(Debug, Default)]
-struct SlabSpawner {
-    slab: OnceCell<Arc<Shared>>,
+struct PoolSpawner {
+    pool: OnceCell<Arc<Shared>>,
 }
 
-impl Spawner for SlabSpawner {
-    type Machine = SlabMachine;
+impl Spawner for PoolSpawner {
+    type Machine = PoolMachine;
 
     fn spawn(&mut self, stream: &mut InputStream) -> Self::Machine {
-        let shared = self.slab.get_or_init(|| {
+        let shared = self.pool.get_or_init(|| {
             let mut capacity_bytes = [0; 2];
             stream.read(&mut capacity_bytes);
             let capacity = usize::from(u16::from_le_bytes(capacity_bytes));
-            let slab = SlabAlloc::new(capacity);
-            Arc::new(Shared::new(slab))
+            let pool = PoolAlloc::new(capacity);
+            Arc::new(Shared::new(pool))
         });
 
-        SlabMachine::new(shared.clone())
+        PoolMachine::new(shared.clone())
     }
 }
 
 #[derive(Debug)]
-struct SlabMachine {
+struct PoolMachine {
     shared: Arc<Shared>,
     values: BTreeMap<u128, Vec<AllocHandle<u128>>>,
 }
 
-impl SlabMachine {
+impl PoolMachine {
     fn new(shared: Arc<Shared>) -> Self {
         Self { values: BTreeMap::new(), shared }
     }
 }
 
-impl Machine for SlabMachine {
+impl Machine for PoolMachine {
     fn cycle(&mut self, opcode: u8, stream: &mut InputStream) {
         match opcode % 3 {
             0 => {
@@ -164,7 +164,7 @@ impl Machine for SlabMachine {
     }
 }
 
-impl Drop for SlabMachine {
+impl Drop for PoolMachine {
     fn drop(&mut self) {
         for (_, handles) in mem::take(&mut self.values) {
             for handle in handles {
@@ -177,5 +177,5 @@ impl Drop for SlabMachine {
 }
 
 fuzz_target!(|data: &[u8]| {
-    Config::new(SlabSpawner::default()).run(data);
+    Config::new(PoolSpawner::default()).run(data);
 });

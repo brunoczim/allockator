@@ -24,7 +24,7 @@ members = [".", "./fuzzsuite"]
 debug = 1
 
 [[bin]]
-name = "slab"
-path = "fuzz_targets/slab.rs"
+name = "pool"
+path = "fuzz_targets/pool.rs"
 test = false
 doc = false
