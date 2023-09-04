@@ -2,7 +2,7 @@ use std::{
     cell::UnsafeCell,
     fmt,
     mem::{self, MaybeUninit},
-    ptr,
+    ptr::{self, NonNull},
     sync::atomic::{AtomicUsize, Ordering::*},
 };
 
@@ -64,16 +64,16 @@ impl<T> SlabAlloc<T> {
             let next = node.next.load(Relaxed);
             match self.free_list.compare_exchange(index, next, Release, Relaxed)
             {
-                Ok(_) => {
-                    break Ok(AllocHandle { node: node as *const Node<T> })
-                },
+                Ok(_) => break Ok(AllocHandle { node: NonNull::from(node) }),
                 Err(new_index) => index = new_index,
             }
         }
     }
 
-    pub unsafe fn dealloc(&self, ptr: AllocHandle<T>) {
-        let diff = ptr.node as usize - (ptr::addr_of!(self.nodes[0]) as usize);
+    pub unsafe fn dealloc(&self, handle: AllocHandle<T>) {
+        let handle_address = handle.node.as_ptr() as usize;
+        let base_address = ptr::addr_of!(self.nodes[0]) as usize;
+        let diff = handle_address - base_address;
         let index = diff / mem::size_of::<Node<T>>();
 
         if self.try_flush_deallocs() {
@@ -184,7 +184,7 @@ unsafe impl<T> Send for SlabAlloc<T> {}
 unsafe impl<T> Sync for SlabAlloc<T> {}
 
 pub struct AllocHandle<T> {
-    node: *const Node<T>,
+    node: NonNull<Node<T>>,
 }
 
 impl<T> fmt::Debug for AllocHandle<T> {
@@ -195,7 +195,7 @@ impl<T> fmt::Debug for AllocHandle<T> {
 
 impl<T> AllocHandle<T> {
     pub unsafe fn pointer(&self) -> *mut T {
-        (*(*self.node).data.get()).as_mut_ptr()
+        (*self.node.as_ref().data.get()).as_mut_ptr()
     }
 }
 

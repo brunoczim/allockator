@@ -84,7 +84,7 @@ where
 
 impl<S> Config<S> {
     pub fn new(spawner: S) -> Self {
-        let min_threads = 4;
+        let min_threads = 1;
         Self {
             spawner,
             cycle_delay: Duration::from_millis(10),
