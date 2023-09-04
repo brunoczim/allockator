@@ -27,9 +27,15 @@ impl Shared {
     fn alloc(&self) -> Option<AllocHandle<u128>> {
         match self.slab.alloc() {
             Ok(handle) => {
-                assert!(
-                    self.count.fetch_add(1, Relaxed) < self.slab.capacity()
-                );
+                let prev = self.count.fetch_add(1, Relaxed);
+                if prev >= self.slab.capacity() {
+                    panic!(
+                        "Allocated a slot but no slots available\nAllocated \
+                         count: {}\nCapacity: {}\n",
+                        prev,
+                        self.slab.capacity()
+                    );
+                }
                 Some(handle)
             },
             Err(_) => None,
@@ -37,8 +43,16 @@ impl Shared {
     }
 
     unsafe fn dealloc(&self, handle: AllocHandle<u128>) {
+        let prev = self.count.fetch_sub(1, Relaxed);
         self.slab.dealloc(handle);
-        assert!(self.count.fetch_sub(1, Relaxed) - 1 <= self.slab.capacity());
+        if prev == 0 || prev > self.slab.capacity() {
+            panic!(
+                "Deallocating a slot but no slots to be \
+                 deallocated\nAllocated count: {}\nCapacity: {}\n",
+                prev,
+                self.slab.capacity(),
+            );
+        }
     }
 }
 
@@ -53,7 +67,7 @@ impl Spawner for SlabSpawner {
     fn spawn(&mut self, stream: &mut InputStream) -> Self::Machine {
         let shared = self.slab.get_or_init(|| {
             let mut capacity_bytes = [0; 2];
-            stream.read_wrapping(&mut capacity_bytes);
+            stream.read(&mut capacity_bytes);
             let capacity = usize::from(u16::from_le_bytes(capacity_bytes));
             let slab = SlabAlloc::new(capacity);
             Arc::new(Shared::new(slab))
@@ -80,7 +94,7 @@ impl Machine for SlabMachine {
         match opcode % 3 {
             0 => {
                 let mut bytes = [0; 16];
-                stream.read_wrapping(&mut bytes);
+                stream.read(&mut bytes);
                 let value = u128::from_le_bytes(bytes);
 
                 if let Some(handle) = self.shared.alloc() {
@@ -93,7 +107,7 @@ impl Machine for SlabMachine {
 
             1 => {
                 let mut bytes = [0; 16];
-                stream.read_wrapping(&mut bytes);
+                stream.read(&mut bytes);
                 let value = u128::from_le_bytes(bytes);
 
                 if let Some((&key, _)) = self.values.range(..= value).next() {
@@ -116,7 +130,7 @@ impl Machine for SlabMachine {
 
             2 => {
                 let mut bytes = [0; 16];
-                stream.read_wrapping(&mut bytes);
+                stream.read(&mut bytes);
                 let value = u128::from_le_bytes(bytes);
 
                 if let Some((&key, _)) = self.values.range(..= value).next() {
@@ -130,7 +144,7 @@ impl Machine for SlabMachine {
                         }
 
                         let mut bytes = [0; 16];
-                        stream.read_wrapping(&mut bytes);
+                        stream.read(&mut bytes);
                         let value = u128::from_le_bytes(bytes);
 
                         unsafe {

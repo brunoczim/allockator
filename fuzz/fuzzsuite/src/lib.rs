@@ -26,20 +26,6 @@ impl InputStream {
         count
     }
 
-    pub fn read_wrapping(&mut self, mut buf: &mut [u8]) {
-        if self.buf.len() > 0 {
-            while buf.len() > 0 {
-                let count = self.read(buf);
-                buf = &mut buf[count ..];
-                if buf.len() > 0 {
-                    self.cursor = 0;
-                }
-            }
-        } else {
-            buf.fill(0);
-        }
-    }
-
     pub fn read_u8(&mut self) -> Option<u8> {
         let mut buf = [0];
         if self.read(&mut buf) == 1 {
@@ -49,9 +35,9 @@ impl InputStream {
         }
     }
 
-    pub fn read_u8_wrapping(&mut self) -> u8 {
+    pub fn read_u8_zeroing(&mut self) -> u8 {
         let mut buf = [0];
-        self.read_wrapping(&mut buf);
+        self.read(&mut buf);
         buf[0]
     }
 }
@@ -199,13 +185,17 @@ where
     }
 
     fn cycle(&mut self, opcode: u8) {
-        match opcode >> 7 {
+        match opcode % 2 {
             0 => {
                 if self.threads.len() < self.config.max_threads {
                     self.spawn();
                 }
             },
-            1 => self.main.cycle(opcode, &mut self.stream),
+            1 => {
+                if let Some(opcode) = self.stream.read_u8() {
+                    self.main.cycle(opcode, &mut self.stream)
+                }
+            },
             _ => unreachable!(),
         }
     }
