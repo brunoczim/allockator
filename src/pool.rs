@@ -129,9 +129,12 @@ impl<T> PoolAlloc<T> {
         let mut dest_first = dest.load(Acquire);
         loop {
             self.nodes[last_index].next.store(dest_first, Relaxed);
-            match dest
-                .compare_exchange(dest_first, first_index, Release, Relaxed)
-            {
+            match dest.compare_exchange(
+                dest_first,
+                first_index,
+                Release,
+                Relaxed,
+            ) {
                 Ok(_) => break,
                 Err(new_free_list) => dest_first = new_free_list,
             }
@@ -163,7 +166,7 @@ impl<T> PoolAlloc<T> {
     }
 
     fn try_flush_deallocs(&self) -> bool {
-        let garbage_list = if self.defer_hint() == 1 {
+        let garbage_list = if self.defer_hint() == 0 {
             self.take_garbage_list()
         } else {
             self.null_index()
